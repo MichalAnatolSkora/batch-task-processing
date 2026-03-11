@@ -1,6 +1,13 @@
+using System;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Data;
 using Dapper;
 using Microsoft.Data.SqlClient;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace BatchProcessing;
 
@@ -25,7 +32,8 @@ public class Worker(ILogger<Worker> logger, IConfiguration configuration) : Back
             }
 
             // Wait before checking for more tasks
-            await Task.Delay(5000, stoppingToken);
+            var delayMs = configuration.GetValue<int>("WorkerDelayMs", 5000);
+            await Task.Delay(delayMs, stoppingToken);
         }
     }
 

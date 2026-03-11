@@ -13,4 +13,11 @@
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.1" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.1" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="BatchProcessing.Tests\**" />
+    <Content Remove="BatchProcessing.Tests\**" />
+    <EmbeddedResource Remove="BatchProcessing.Tests\**" />
+    <None Remove="BatchProcessing.Tests\**" />
+  </ItemGroup>
 </Project>
