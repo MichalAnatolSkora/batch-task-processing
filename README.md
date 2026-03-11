@@ -86,3 +86,18 @@ FROM BatchDb.dbo.BatchTasks
 GROUP BY PickedByWorker;
 ```
 *You should see 10 distinct worker GUIDs, each having processed a subset of tasks, with the sum adding up precisely to 10,000.*
+
+## 📚 Recommended Reading & Resources
+
+If you want to dive deeper into the concepts demonstrated in this repository, check out these excellent resources:
+
+### Competing Consumers Pattern
+*   [Competing Consumers Pattern - Microsoft Cloud Design Patterns](https://learn.microsoft.com/en-us/azure/architecture/patterns/competing-consumers) - A comprehensive guide on how and why to distribute messages across multiple concurrent consumers.
+*   [Enterprise Integration Patterns: Competing Consumers](https://www.enterpriseintegrationpatterns.com/patterns/messaging/CompetingConsumers.html) - The original foundational definition of the pattern by Gregor Hohpe and Bobby Woolf.
+
+### SQL Server as a Message Queue
+*   [Using SQL Server as a Message Queue](https://rusanu.com/2010/03/26/using-tables-as-queues/) - Remus Rusanu's definitive architecture guide on implementing highly concurrent, deadlock-free queues using database tables.
+*   [Table Hints (Transact-SQL)](https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table) - Microsoft's official documentation detailing the behavior of `UPDLOCK`, `READPAST`, and `ROWLOCK` table hints.
+
+### .NET Worker Services
+*   [Background tasks with hosted services in ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services) - Microsoft's official guide on creating and running continuous background tasks (.NET Worker Services).
