@@ -87,6 +87,20 @@ GROUP BY PickedByWorker;
 ```
 *You should see 10 distinct worker GUIDs, each having processed a subset of tasks, with the sum adding up precisely to 10,000.*
 
+## 🧪 Integration Tests with Testcontainers
+
+This project includes a robust suite of integration tests in the `BatchProcessing.Tests` project to prove that the concurrency control works flawlessly.
+
+We use [Testcontainers for .NET](https://dotnet.testcontainers.org/) to automatically spin up a real Microsoft SQL Server 2022 instance inside a Docker container during test execution. 
+
+The tests demonstrate:
+- A single worker can successfully claim and process chunks of tasks.
+- **Multiple (10) concurrent workers** running simultaneously against the exact same table process all 10,000 pending tasks without a single duplication, collision, or deadlock.
+
+To run the integration tests yourself:
+1. Ensure Docker Desktop is running.
+2. Execute `dotnet test` from the root directory.
+
 ## 📚 Recommended Reading & Resources
 
 If you want to dive deeper into the concepts demonstrated in this repository, check out these excellent resources:
