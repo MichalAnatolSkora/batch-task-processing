@@ -1,13 +1,12 @@
-using System;
-
 namespace BatchProcessing;
 
-public class BatchTask
+public class Upload
 {
     public int Id { get; set; }
-    public string Payload { get; set; } = string.Empty;
+    public string ImportTypeName { get; set; } = string.Empty;
+    public DateTime DateOfCreation { get; set; }
+    public string Metadata { get; set; } = "{}";
     public string Status { get; set; } = "Pending";
-    public DateTime CreatedAt { get; set; }
     public Guid? PickedByWorker { get; set; }
     public DateTime? ProcessedAt { get; set; }
 }

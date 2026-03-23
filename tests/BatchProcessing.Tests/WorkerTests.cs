@@ -1,10 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Data;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using BatchProcessing;
 using Dapper;
 using FluentAssertions;
 using Microsoft.Data.SqlClient;
@@ -46,27 +44,61 @@ public class WorkerTests : IAsyncLifetime
         using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
 
-        const string initQuery = @"
-            CREATE TABLE BatchTasks (
+        const string schemaSql = @"
+            CREATE TABLE Uploads (
                 Id INT IDENTITY(1,1) PRIMARY KEY,
-                Payload NVARCHAR(MAX),
-                Status VARCHAR(20) DEFAULT 'Pending',
-                CreatedAt DATETIME DEFAULT GETDATE(),
+                ImportTypeName NVARCHAR(255) NOT NULL,
+                DateOfCreation DATETIME NOT NULL DEFAULT GETDATE(),
+                Metadata NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+                Status VARCHAR(20) NOT NULL DEFAULT 'Pending',
                 PickedByWorker UNIQUEIDENTIFIER NULL,
                 ProcessedAt DATETIME NULL
             );
 
-            SET NOCOUNT ON;
-            DECLARE @i INT = 1;
-            WHILE @i <= 10000
-            BEGIN
-                INSERT INTO BatchTasks (Payload, Status, CreatedAt)
-                VALUES ('Task payload ' + CAST(@i AS VARCHAR), 'Pending', GETDATE());
-                SET @i = @i + 1;
-            END
-        ";
+            CREATE TABLE RowValues (
+                Id BIGINT IDENTITY(1,1) PRIMARY KEY,
+                UploadId INT NOT NULL,
+                ParentId BIGINT NULL,
+                CollectionName NVARCHAR(255) NOT NULL,
+                GroupKey NVARCHAR(255) NOT NULL,
+                Value NVARCHAR(MAX) NOT NULL,
+                CONSTRAINT FK_RowValues_Upload FOREIGN KEY (UploadId) REFERENCES Uploads(Id),
+                CONSTRAINT FK_RowValues_Parent FOREIGN KEY (ParentId) REFERENCES RowValues(Id)
+            );";
 
-        await connection.ExecuteAsync(initQuery);
+        await connection.ExecuteAsync(schemaSql);
+    }
+
+    private async Task SeedUploadWithRows(SqlConnection connection, string importType, int rootRowCount, int childRowsPerRoot)
+    {
+        var uploadId = await connection.ExecuteScalarAsync<int>(
+            @"INSERT INTO Uploads (ImportTypeName, Status) VALUES (@ImportType, 'Pending');
+              SELECT SCOPE_IDENTITY();",
+            new { ImportType = importType });
+
+        for (var i = 1; i <= rootRowCount; i++)
+        {
+            var rootId = await connection.ExecuteScalarAsync<long>(
+                @"INSERT INTO RowValues (UploadId, ParentId, CollectionName, GroupKey, Value)
+                  VALUES (@UploadId, NULL, 'main', @GroupKey, @Value);
+                  SELECT SCOPE_IDENTITY();",
+                new { UploadId = uploadId, GroupKey = $"group-{i}", Value = $"root-col1,root-col2,{i}" });
+
+            for (var j = 1; j <= childRowsPerRoot; j++)
+            {
+                await connection.ExecuteAsync(
+                    @"INSERT INTO RowValues (UploadId, ParentId, CollectionName, GroupKey, Value)
+                      VALUES (@UploadId, @ParentId, @CollectionName, @GroupKey, @Value);",
+                    new
+                    {
+                        UploadId = uploadId,
+                        ParentId = rootId,
+                        CollectionName = "details",
+                        GroupKey = $"group-{i}",
+                        Value = $"child-col1,child-col2,{i}-{j}"
+                    });
+            }
+        }
     }
 
     private Worker CreateWorker(int delayMs = 100)
@@ -86,43 +118,47 @@ public class WorkerTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Worker_ShouldClaimTasks_WhenRunning()
+    public async Task Worker_ShouldClaimAndCompleteUpload()
     {
         // Arrange
-        // We set delay to 5000 so it only runs once in the 1 second timeframe
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+        await SeedUploadWithRows(connection, "Orders", rootRowCount: 5, childRowsPerRoot: 3);
+
         var worker = CreateWorker(5000);
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
 
         // Act
-        // Run the worker until cancelled
         await worker.StartAsync(cts.Token);
-        await Task.Delay(1000); // Give it a second to process some tasks
-
+        await Task.Delay(1500);
         try { await worker.StopAsync(CancellationToken.None); } catch { }
 
         // Assert
-        using var connection = new SqlConnection(_connectionString);
-        var processingCount = await connection.ExecuteScalarAsync<int>(
-            "SELECT COUNT(1) FROM BatchTasks WHERE Status = 'Processing'");
+        var status = await connection.ExecuteScalarAsync<string>(
+            "SELECT Status FROM Uploads WHERE Id = 1");
+        status.Should().Be("Completed");
 
-        // Since it processes 200 at a time and runs in a loop with a 5-second delay, 
-        // it should pick exactly 200 tasks in 1 second.
-        processingCount.Should().Be(200);
-
-        var pendingCount = await connection.ExecuteScalarAsync<int>(
-            "SELECT COUNT(1) FROM BatchTasks WHERE Status = 'Pending'");
-
-        pendingCount.Should().Be(10000 - 200);
+        var totalRows = await connection.ExecuteScalarAsync<int>(
+            "SELECT COUNT(1) FROM RowValues WHERE UploadId = 1");
+        totalRows.Should().Be(5 + 5 * 3); // 5 root + 15 children
     }
 
     [Fact]
-    public async Task MultipleWorkers_ShouldNotClaimSameTasks_AndShouldProcessAll()
+    public async Task MultipleWorkers_ShouldNotClaimSameUpload()
     {
         // Arrange
-        const int numberOfWorkers = 10;
-        var workers = Enumerable.Range(0, numberOfWorkers).Select(_ => CreateWorker()).ToList();
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        // Seed multiple uploads
+        for (var i = 0; i < 10; i++)
+        {
+            await SeedUploadWithRows(connection, $"Import-{i}", rootRowCount: 3, childRowsPerRoot: 2);
+        }
+
+        const int numberOfWorkers = 5;
+        var workers = Enumerable.Range(0, numberOfWorkers).Select(_ => CreateWorker()).ToList();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         // Act
         var workerTasks = workers.Select(w => Task.Run(async () =>
@@ -135,27 +171,16 @@ public class WorkerTests : IAsyncLifetime
             await w.StopAsync(CancellationToken.None);
         })).ToArray();
 
-        try
-        {
-            await Task.WhenAll(workerTasks);
-        }
+        try { await Task.WhenAll(workerTasks); }
         catch (TaskCanceledException) { }
 
-        // Assert
-        using var connection = new SqlConnection(_connectionString);
+        // Assert - all uploads should be completed
+        var completedCount = await connection.ExecuteScalarAsync<int>(
+            "SELECT COUNT(1) FROM Uploads WHERE Status = 'Completed'");
+        completedCount.Should().Be(10);
 
-        var finalProcessingCount = await connection.ExecuteScalarAsync<int>(
-            "SELECT COUNT(1) FROM BatchTasks WHERE Status = 'Processing'");
-
-        // Asserting all tasks picked
-        finalProcessingCount.Should().BeGreaterThan(200);
-
-        var workerCounts = await connection.QueryAsync<int>(
-             "SELECT COUNT(1) FROM BatchTasks WHERE PickedByWorker IS NOT NULL GROUP BY PickedByWorker");
-
-        var processedCount = await connection.ExecuteScalarAsync<int>(
-            "SELECT COUNT(1) FROM BatchTasks WHERE Status = 'Processing'");
-
-        processedCount.Should().Be(10000); // Prove all completed
+        var pendingCount = await connection.ExecuteScalarAsync<int>(
+            "SELECT COUNT(1) FROM Uploads WHERE Status = 'Pending'");
+        pendingCount.Should().Be(0);
     }
 }
