@@ -27,7 +27,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\BatchProcessing.csproj" />
+    <ProjectReference Include="..\..\src\BatchProcessing\BatchProcessing.csproj" />
   </ItemGroup>
 
 </Project>

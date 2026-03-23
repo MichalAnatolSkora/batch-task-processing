@@ -1,0 +1,30 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.5.2.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BatchProcessing", "src\BatchProcessing\BatchProcessing.csproj", "{DF05F572-3DBD-6FD8-753E-93B902E2B365}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BatchProcessing.Tests", "tests\BatchProcessing.Tests\BatchProcessing.Tests.csproj", "{A8BA6020-43A6-D31A-207C-23907E0B1C93}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{DF05F572-3DBD-6FD8-753E-93B902E2B365}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DF05F572-3DBD-6FD8-753E-93B902E2B365}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DF05F572-3DBD-6FD8-753E-93B902E2B365}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DF05F572-3DBD-6FD8-753E-93B902E2B365}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A8BA6020-43A6-D31A-207C-23907E0B1C93}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A8BA6020-43A6-D31A-207C-23907E0B1C93}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A8BA6020-43A6-D31A-207C-23907E0B1C93}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A8BA6020-43A6-D31A-207C-23907E0B1C93}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {5EE8B7CE-E9B2-4B92-9E04-1C334CF41B72}
+	EndGlobalSection
+EndGlobal

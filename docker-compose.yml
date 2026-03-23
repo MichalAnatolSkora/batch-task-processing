@@ -27,7 +27,9 @@ services:
     command: /bin/bash -c "sleep 5 && /opt/mssql-tools/bin/sqlcmd -S sqlserver -U sa -P 'Your_Strong_Password123!' -d master -i /init.sql"
 
   worker:
-    build: .
+    build:
+      context: .
+      dockerfile: src/BatchProcessing/Dockerfile
     depends_on:
       db_init:
         condition: service_completed_successfully
