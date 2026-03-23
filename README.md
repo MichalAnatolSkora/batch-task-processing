@@ -13,6 +13,8 @@ Instead of a single worker processing everything sequentially, the workload is d
 - **Resiliency & High Availability**: If one consumer fails or crashes, other active consumers in the pool simply continue processing the remaining tasks.
 - **Load Leveling**: The system naturally handles bursts of tasks, balancing the processing load evenly across all available workers.
 
+While this pattern is traditionally implemented using dedicated message brokers like RabbitMQ, Apache Kafka, or Azure Service Bus, this repository demonstrates how to achieve the same robust concurrent behavior relying entirely on a standard relational database architecture.
+
 ## ⚠️ The Problem: Concurrency & Locking
 
 When designing a background processing system where multiple worker instances pull tasks from a central database table, you typically face two major concurrency challenges:
