@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using BatchProcessing.ImportHandlers;
 using Dapper;
 using FluentAssertions;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Moq;
 using Testcontainers.MsSql;
@@ -69,7 +71,13 @@ public class WorkerTests : IAsyncLifetime
         await connection.ExecuteAsync(schemaSql);
     }
 
-    private async Task SeedUploadWithRows(SqlConnection connection, string importType, int rootRowCount, int childRowsPerRoot)
+    private async Task SeedUploadWithRows(
+        SqlConnection connection,
+        string importType,
+        string rootCollection,
+        string childCollection,
+        int rootRowCount,
+        int childRowsPerRoot)
     {
         var uploadId = await connection.ExecuteScalarAsync<int>(
             @"INSERT INTO Uploads (ImportTypeName, Status) VALUES (@ImportType, 'Pending');
@@ -80,9 +88,9 @@ public class WorkerTests : IAsyncLifetime
         {
             var rootId = await connection.ExecuteScalarAsync<long>(
                 @"INSERT INTO RowValues (UploadId, ParentId, CollectionName, GroupKey, Value)
-                  VALUES (@UploadId, NULL, 'main', @GroupKey, @Value);
+                  VALUES (@UploadId, NULL, @CollectionName, @GroupKey, @Value);
                   SELECT SCOPE_IDENTITY();",
-                new { UploadId = uploadId, GroupKey = $"group-{i}", Value = $"root-col1,root-col2,{i}" });
+                new { UploadId = uploadId, CollectionName = rootCollection, GroupKey = $"group-{i}", Value = $"col1,col2,{i}" });
 
             for (var j = 1; j <= childRowsPerRoot; j++)
             {
@@ -93,7 +101,7 @@ public class WorkerTests : IAsyncLifetime
                     {
                         UploadId = uploadId,
                         ParentId = rootId,
-                        CollectionName = "details",
+                        CollectionName = childCollection,
                         GroupKey = $"group-{i}",
                         Value = $"child-col1,child-col2,{i}-{j}"
                     });
@@ -114,16 +122,23 @@ public class WorkerTests : IAsyncLifetime
             .AddInMemoryCollection(inMemorySettings)
             .Build();
 
-        return new Worker(loggerMock.Object, configuration);
+        var services = new ServiceCollection();
+        services.AddKeyedScoped<IImportHandler, OrdersImportHandler>("Orders");
+        services.AddKeyedScoped<IImportHandler, ProductsImportHandler>("Products");
+        services.AddLogging();
+        var serviceProvider = services.BuildServiceProvider();
+
+        return new Worker(loggerMock.Object, configuration, serviceProvider);
     }
 
     [Fact]
-    public async Task Worker_ShouldClaimAndCompleteUpload()
+    public async Task Worker_ShouldClaimAndCompleteUpload_WithOrdersHandler()
     {
         // Arrange
         using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
-        await SeedUploadWithRows(connection, "Orders", rootRowCount: 5, childRowsPerRoot: 3);
+        await SeedUploadWithRows(connection, "Orders", "orders", "order-lines",
+            rootRowCount: 5, childRowsPerRoot: 3);
 
         var worker = CreateWorker(5000);
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
@@ -138,9 +153,32 @@ public class WorkerTests : IAsyncLifetime
             "SELECT Status FROM Uploads WHERE Id = 1");
         status.Should().Be("Completed");
 
-        var totalRows = await connection.ExecuteScalarAsync<int>(
-            "SELECT COUNT(1) FROM RowValues WHERE UploadId = 1");
-        totalRows.Should().Be(5 + 5 * 3); // 5 root + 15 children
+        var pickedByWorker = await connection.ExecuteScalarAsync<Guid?>(
+            "SELECT PickedByWorker FROM Uploads WHERE Id = 1");
+        pickedByWorker.Should().NotBeNull();
+    }
+
+    [Fact]
+    public async Task Worker_ShouldFailUpload_WhenNoHandlerRegistered()
+    {
+        // Arrange
+        using var connection = new SqlConnection(_connectionString);
+        await connection.OpenAsync();
+        await SeedUploadWithRows(connection, "UnknownType", "data", "sub-data",
+            rootRowCount: 2, childRowsPerRoot: 1);
+
+        var worker = CreateWorker(5000);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+
+        // Act
+        await worker.StartAsync(cts.Token);
+        await Task.Delay(1500);
+        try { await worker.StopAsync(CancellationToken.None); } catch { }
+
+        // Assert
+        var status = await connection.ExecuteScalarAsync<string>(
+            "SELECT Status FROM Uploads WHERE Id = 1");
+        status.Should().Be("Failed");
     }
 
     [Fact]
@@ -150,10 +188,10 @@ public class WorkerTests : IAsyncLifetime
         using var connection = new SqlConnection(_connectionString);
         await connection.OpenAsync();
 
-        // Seed multiple uploads
         for (var i = 0; i < 10; i++)
         {
-            await SeedUploadWithRows(connection, $"Import-{i}", rootRowCount: 3, childRowsPerRoot: 2);
+            await SeedUploadWithRows(connection, "Orders", "orders", "order-lines",
+                rootRowCount: 3, childRowsPerRoot: 2);
         }
 
         const int numberOfWorkers = 5;
@@ -174,7 +212,7 @@ public class WorkerTests : IAsyncLifetime
         try { await Task.WhenAll(workerTasks); }
         catch (TaskCanceledException) { }
 
-        // Assert - all uploads should be completed
+        // Assert - all uploads completed, each by a different or same worker but no double-claims
         var completedCount = await connection.ExecuteScalarAsync<int>(
             "SELECT COUNT(1) FROM Uploads WHERE Status = 'Completed'");
         completedCount.Should().Be(10);

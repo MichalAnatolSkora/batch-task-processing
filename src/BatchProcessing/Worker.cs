@@ -1,13 +1,18 @@
 using System.Data;
+using BatchProcessing.ImportHandlers;
 using Dapper;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace BatchProcessing;
 
-public class Worker(ILogger<Worker> logger, IConfiguration configuration) : BackgroundService
+public class Worker(
+    ILogger<Worker> logger,
+    IConfiguration configuration,
+    IServiceProvider serviceProvider) : BackgroundService
 {
     private readonly string? _connectionString = configuration.GetConnectionString("DefaultConnection");
     private readonly Guid _workerId = Guid.NewGuid();
@@ -68,15 +73,20 @@ public class Worker(ILogger<Worker> logger, IConfiguration configuration) : Back
 
         try
         {
-            var rowCount = await db.ExecuteScalarAsync<long>(
-                new CommandDefinition(
-                    "SELECT COUNT(1) FROM RowValues WHERE UploadId = @UploadId",
-                    new { UploadId = upload.Id },
-                    cancellationToken: stoppingToken));
+            var handler = serviceProvider.GetKeyedService<IImportHandler>(upload.ImportTypeName);
 
-            logger.LogInformation("Upload {UploadId} has {RowCount} rows to process.", upload.Id, rowCount);
+            if (handler is null)
+            {
+                logger.LogError("No handler registered for import type '{ImportType}'.", upload.ImportTypeName);
+                await db.ExecuteAsync(
+                    new CommandDefinition(
+                        "UPDATE Uploads SET Status = 'Failed' WHERE Id = @Id",
+                        new { upload.Id },
+                        cancellationToken: stoppingToken));
+                return;
+            }
 
-            // TODO: actual processing logic per ImportTypeName
+            await handler.HandleAsync(upload, db, stoppingToken);
 
             await db.ExecuteAsync(
                 new CommandDefinition(
