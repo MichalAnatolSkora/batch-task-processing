@@ -1,10 +1,10 @@
 # Batch Tasks Processing - Competing Consumers Pattern
 
-This repository demonstrates the **Competing Consumers** pattern using a .NET Worker Service and a Microsoft SQL Server database. The solution runs multiple worker instances in parallel, processing background tasks from a shared database table without conflict or duplication.
+This repository demonstrates the **Competing Consumers** pattern using a .NET Worker Service and a Microsoft SQL Server database. The solution runs multiple worker instances in parallel, processing background data imports (Uploads) from a shared database without conflict or duplication.
 
 ## 🤝 What is the Competing Consumers Pattern?
 
-The **Competing Consumers** pattern is a messaging design pattern that enables multiple concurrent consumers (e.g., our .NET Worker instances) to pull and process messages or tasks from a single, shared channel (in this case, the `BatchTasks` database table). 
+The **Competing Consumers** pattern is a messaging design pattern that enables multiple concurrent consumers (e.g., our .NET Worker instances) to pull and process messages or tasks from a single, shared channel.
 
 Instead of a single worker processing everything sequentially, the workload is distributed across a pool of "competing" workers.
 
@@ -13,18 +13,16 @@ Instead of a single worker processing everything sequentially, the workload is d
 - **Resiliency & High Availability**: If one consumer fails or crashes, other active consumers in the pool simply continue processing the remaining tasks.
 - **Load Leveling**: The system naturally handles bursts of tasks, balancing the processing load evenly across all available workers.
 
-While this pattern is traditionally implemented using dedicated message brokers like RabbitMQ, Apache Kafka, or Azure Service Bus, this repository demonstrates how to achieve the same robust concurrent behavior relying entirely on a standard relational database architecture.
-
 ## ⚠️ The Problem: Concurrency & Locking
 
 When designing a background processing system where multiple worker instances pull tasks from a central database table, you typically face two major concurrency challenges:
 
-1. **Duplicate Processing (Race Condition)**: Two workers query the database at the exact same millisecond: `SELECT TOP(200) * FROM Tasks WHERE Status = 'Pending'`. They both receive the same 200 tasks and process them, resulting in duplicated work (e.g., sending the same email twice, double-charging a customer).
+1. **Duplicate Processing (Race Condition)**: Two workers query the database at the exact same millisecond: `SELECT TOP(1) * FROM Uploads WHERE Status = 'Pending'`. They both receive the same upload and process it, resulting in duplicated work.
 2. **Deadlocks**: To prevent duplicate processing, you might wrap your `SELECT` and subsequent `UPDATE` in a heavy transaction. This causes the workers to block one another. As workers scale up, database contention skyrockets, queries time out, and the database becomes the bottleneck.
 
 ## 🛠️ The Solution: `UPDLOCK, READPAST`
 
-We solve this using SQL Server's native table hints, combined with an atomic `UPDATE ... OUTPUT` statement. This allows us to fetch and claim the tasks in a single, atomic operation that skips already locked rows.
+We solve this using SQL Server's native table hints, combined with an atomic `UPDATE ... OUTPUT` statement. This allows us to fetch and claim the pending uploads in a single, atomic operation that skips already locked rows.
 
 ### How it works
 
@@ -32,33 +30,29 @@ The core logic is located in `Worker.cs`:
 
 ```sql
 WITH CTE AS (
-    SELECT TOP (200) *
-    FROM BatchTasks WITH (UPDLOCK, READPAST)
+    SELECT TOP (1) *
+    FROM Uploads WITH (UPDLOCK, READPAST)
     WHERE Status = 'Pending'
-    ORDER BY CreatedAt ASC
+    ORDER BY DateOfCreation ASC
 )
 UPDATE CTE
 SET Status = 'Processing', PickedByWorker = @WorkerId, ProcessedAt = GETDATE()
-OUTPUT INSERTED.Id, INSERTED.Payload, INSERTED.Status, INSERTED.CreatedAt, INSERTED.PickedByWorker, INSERTED.ProcessedAt;
+OUTPUT INSERTED.Id, INSERTED.ImportTypeName, INSERTED.DateOfCreation, INSERTED.Metadata, INSERTED.Status, INSERTED.PickedByWorker, INSERTED.ProcessedAt;
 ```
 
 *   `UPDLOCK`: When a worker selects a row, it immediately places an Update Lock on it. No other worker can place an `UPDLOCK` or `X` (exclusive) lock on that same row.
 *   `READPAST`: **This is the magic.** If Worker B tries to read a row that is currently locked by Worker A, Worker B will *not* wait. Instead, SQL Server instructs Worker B to simply skip over the locked row and find the next available unlocked row.
 *   `OUTPUT INSERTED.*`: We immediately change the status to `Processing` (committing the claim) and return the claimed rows back to the C# application in one round-trip.
 
-### Why this is powerful
-
-*   **No Blocking**: 10, 20, or 50 workers can query the exact same table simultaneously. Thanks to `READPAST`, they seamlessly slide past each other's locks, grabbing completely distinct chunks of tasks.
-*   **Zero Duplicates**: The atomic `UPDATE` guarantees that a task is claimed exclusively by one, and only one, worker.
-*   **High Throughput**: We bypass the need for an external queue like RabbitMQ or Redis, leveraging the existing relational database to achieve high-performance message queuing.
+Once an `Upload` is claimed, the worker processes the associated `RowValues` in batches. The rows are grouped into `RowGroup` objects using a `GroupKey`, and processed dynamically by a specific `IImportHandler` (like `OrdersImportHandler` or `ProductsImportHandler`) depending on the `ImportTypeName`.
 
 ## 🚀 Running the Verification Demo
 
-This project includes a `docker-compose.yml` file designed to prove the pattern works.
+This project includes a `docker-compose.yml` file designed to run the environment.
 
 It spins up:
 1.  **SQL Server 2022** instance.
-2.  **Database Initializer** that automatically creates the schema and seeds exactly **10,000 pending tasks**.
+2.  **Database Initializer** that automatically creates the `Uploads` and `RowValues` schema.
 3.  **10 Replicas** of the .NET Worker Service running simultaneously.
 
 ### Requirements
@@ -71,21 +65,7 @@ It spins up:
    ```bash
    docker-compose up --build
    ```
-3. Watch the logs. You will see 10 distinct workers (identified by their unique GUIDs) starting up, securely claiming chunks of 200 tasks at a time, and logging their progress.
-4. The background tasks will be depleted in a matter of seconds.
-
-### Verifying the Result
-
-Connecting to the database (`localhost,1433`, User: `sa`, Password: `Your_Strong_Password123!`) after the run allows you to verify the distribution of work among the 10 instances:
-
-```sql
-SELECT 
-    PickedByWorker, 
-    COUNT(Id) AS NumberOfTasksProcessed 
-FROM BatchDb.dbo.BatchTasks 
-GROUP BY PickedByWorker;
-```
-*You should see 10 distinct worker GUIDs, each having processed a subset of tasks, with the sum adding up precisely to 10,000.*
+3. The database schema will be prepared. If you insert records into the `Uploads` and `RowValues` tables, the workers will competitively claim and process the uploads, routing them to the correct `IImportHandler`.
 
 ## 🧪 Integration Tests with Testcontainers
 
@@ -94,8 +74,9 @@ This project includes a robust suite of integration tests in the `BatchProcessin
 We use [Testcontainers for .NET](https://dotnet.testcontainers.org/) to automatically spin up a real Microsoft SQL Server 2022 instance inside a Docker container during test execution. 
 
 The tests demonstrate:
-- A single worker can successfully claim and process chunks of tasks.
-- **Multiple (10) concurrent workers** running simultaneously against the exact same table process all 10,000 pending tasks without a single duplication, collision, or deadlock.
+- A single worker can successfully claim and process an upload utilizing the correct keyed service handler.
+- **Multiple (5) concurrent workers** running simultaneously against the exact same table process 10 pending uploads without a single duplication, collision, or deadlock.
+- Unknown import types correctly fail the upload status.
 
 To run the integration tests yourself:
 1. Ensure Docker Desktop is running.
@@ -103,15 +84,13 @@ To run the integration tests yourself:
 
 ## 📚 Recommended Reading & Resources
 
-If you want to dive deeper into the concepts demonstrated in this repository, check out these excellent resources:
-
 ### Competing Consumers Pattern
-*   [Competing Consumers Pattern - Microsoft Cloud Design Patterns](https://learn.microsoft.com/en-us/azure/architecture/patterns/competing-consumers) - A comprehensive guide on how and why to distribute messages across multiple concurrent consumers.
-*   [Enterprise Integration Patterns: Competing Consumers](https://www.enterpriseintegrationpatterns.com/patterns/messaging/CompetingConsumers.html) - The original foundational definition of the pattern by Gregor Hohpe and Bobby Woolf.
+*   [Competing Consumers Pattern - Microsoft Cloud Design Patterns](https://learn.microsoft.com/en-us/azure/architecture/patterns/competing-consumers)
+*   [Enterprise Integration Patterns: Competing Consumers](https://www.enterpriseintegrationpatterns.com/patterns/messaging/CompetingConsumers.html)
 
 ### SQL Server as a Message Queue
-*   [Using SQL Server as a Message Queue](https://rusanu.com/2010/03/26/using-tables-as-queues/) - Remus Rusanu's definitive architecture guide on implementing highly concurrent, deadlock-free queues using database tables.
-*   [Table Hints (Transact-SQL)](https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table) - Microsoft's official documentation detailing the behavior of `UPDLOCK`, `READPAST`, and `ROWLOCK` table hints.
+*   [Using SQL Server as a Message Queue](https://rusanu.com/2010/03/26/using-tables-as-queues/)
+*   [Table Hints (Transact-SQL)](https://learn.microsoft.com/en-us/sql/t-sql/queries/hints-transact-sql-table)
 
 ### .NET Worker Services
-*   [Background tasks with hosted services in ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services) - Microsoft's official guide on creating and running continuous background tasks (.NET Worker Services).
+*   [Background tasks with hosted services in ASP.NET Core](https://learn.microsoft.com/en-us/aspnet/core/fundamentals/host/hosted-services)
