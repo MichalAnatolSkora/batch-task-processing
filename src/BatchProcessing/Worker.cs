@@ -86,7 +86,36 @@ public class Worker(
                 return;
             }
 
-            await handler.HandleAsync(upload, db, stoppingToken);
+            var batchSize = configuration.GetValue<int>("BatchSize", 1000);
+            long lastId = 0;
+
+            while (true)
+            {
+                var batch = (await db.QueryAsync<RowValue>(
+                    new CommandDefinition(
+                        @"SELECT TOP (@BatchSize) * FROM RowValues
+                          WHERE UploadId = @UploadId AND Id > @LastId
+                          ORDER BY Id ASC",
+                        new { BatchSize = batchSize, UploadId = upload.Id, LastId = lastId },
+                        cancellationToken: stoppingToken))).ToList();
+
+                if (batch.Count == 0)
+                    break;
+
+                var groups = batch
+                    .GroupBy(r => r.GroupKey)
+                    .Select(g => new RowGroup { GroupKey = g.Key, Rows = g.ToList() });
+
+                foreach (var group in groups)
+                {
+                    await handler.HandleAsync(upload, group, stoppingToken);
+                }
+
+                lastId = batch[^1].Id;
+
+                if (batch.Count < batchSize)
+                    break;
+            }
 
             await db.ExecuteAsync(
                 new CommandDefinition(

@@ -1,5 +1,3 @@
-using System.Data;
-using Dapper;
 using Microsoft.Extensions.Logging;
 
 namespace BatchProcessing.ImportHandlers;
@@ -8,16 +6,14 @@ public class ProductsImportHandler(ILogger<ProductsImportHandler> logger) : IImp
 {
     public string ImportTypeName => "Products";
 
-    public async Task HandleAsync(Upload upload, IDbConnection db, CancellationToken ct)
+    public Task HandleAsync(Upload upload, RowGroup group, CancellationToken ct)
     {
-        // Root collection "products" — each row is: SKU,Name,Category,Price
-        var productRows = (await db.QueryAsync<RowValue>(
-            new CommandDefinition(
-                "SELECT * FROM RowValues WHERE UploadId = @UploadId AND ParentId IS NULL AND CollectionName = 'products'",
-                new { UploadId = upload.Id },
-                cancellationToken: ct))).ToList();
+        var productRows = group.Rows
+            .Where(r => r.ParentId == null && r.CollectionName == "products")
+            .ToList();
 
-        logger.LogInformation("Products import {UploadId}: processing {Count} products.", upload.Id, productRows.Count);
+        logger.LogInformation("Products import {UploadId}, group {GroupKey}: processing {Count} products.",
+            upload.Id, group.GroupKey, productRows.Count);
 
         foreach (var product in productRows)
         {
@@ -29,12 +25,8 @@ public class ProductsImportHandler(ILogger<ProductsImportHandler> logger) : IImp
 
             logger.LogInformation("Product {SKU}: {Name} [{Category}] @ {Price}", sku, name, category, price);
 
-            // Child collection "product-variants" — each row: VariantName,Color,Size
-            var variantRows = await db.QueryAsync<RowValue>(
-                new CommandDefinition(
-                    "SELECT * FROM RowValues WHERE UploadId = @UploadId AND ParentId = @ParentId AND CollectionName = 'product-variants'",
-                    new { UploadId = upload.Id, ParentId = product.Id },
-                    cancellationToken: ct));
+            var variantRows = group.Rows
+                .Where(r => r.ParentId == product.Id && r.CollectionName == "product-variants");
 
             foreach (var variant in variantRows)
             {
@@ -46,5 +38,7 @@ public class ProductsImportHandler(ILogger<ProductsImportHandler> logger) : IImp
                 logger.LogInformation("  Variant: {Variant} Color={Color} Size={Size}", variantName, color, size);
             }
         }
+
+        return Task.CompletedTask;
     }
 }

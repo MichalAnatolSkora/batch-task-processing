@@ -1,5 +1,3 @@
-using System.Data;
-using Dapper;
 using Microsoft.Extensions.Logging;
 
 namespace BatchProcessing.ImportHandlers;
@@ -8,16 +6,14 @@ public class OrdersImportHandler(ILogger<OrdersImportHandler> logger) : IImportH
 {
     public string ImportTypeName => "Orders";
 
-    public async Task HandleAsync(Upload upload, IDbConnection db, CancellationToken ct)
+    public Task HandleAsync(Upload upload, RowGroup group, CancellationToken ct)
     {
-        // Root collection "orders" — each row is an order header: OrderNumber,CustomerName,TotalAmount
-        var orderRows = (await db.QueryAsync<RowValue>(
-            new CommandDefinition(
-                "SELECT * FROM RowValues WHERE UploadId = @UploadId AND ParentId IS NULL AND CollectionName = 'orders'",
-                new { UploadId = upload.Id },
-                cancellationToken: ct))).ToList();
+        var orderRows = group.Rows
+            .Where(r => r.ParentId == null && r.CollectionName == "orders")
+            .ToList();
 
-        logger.LogInformation("Orders import {UploadId}: processing {Count} order headers.", upload.Id, orderRows.Count);
+        logger.LogInformation("Orders import {UploadId}, group {GroupKey}: processing {Count} order headers.",
+            upload.Id, group.GroupKey, orderRows.Count);
 
         foreach (var order in orderRows)
         {
@@ -29,12 +25,8 @@ public class OrdersImportHandler(ILogger<OrdersImportHandler> logger) : IImportH
             logger.LogInformation("Order {OrderNumber} for {Customer}, total {Amount}.",
                 orderNumber, customerName, totalAmount);
 
-            // Child collection "order-lines" — each row: ProductName,Quantity,UnitPrice
-            var lineRows = await db.QueryAsync<RowValue>(
-                new CommandDefinition(
-                    "SELECT * FROM RowValues WHERE UploadId = @UploadId AND ParentId = @ParentId AND CollectionName = 'order-lines'",
-                    new { UploadId = upload.Id, ParentId = order.Id },
-                    cancellationToken: ct));
+            var lineRows = group.Rows
+                .Where(r => r.ParentId == order.Id && r.CollectionName == "order-lines");
 
             foreach (var line in lineRows)
             {
@@ -46,5 +38,7 @@ public class OrdersImportHandler(ILogger<OrdersImportHandler> logger) : IImportH
                 logger.LogInformation("  Line: {Product} x{Qty} @ {Price}", product, qty, price);
             }
         }
+
+        return Task.CompletedTask;
     }
 }
