@@ -28,6 +28,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\BatchProcessing\BatchProcessing.csproj" />
+    <ProjectReference Include="..\..\src\BatchProcessing.OrdersApi\BatchProcessing.OrdersApi.csproj" />
   </ItemGroup>
 
 </Project>

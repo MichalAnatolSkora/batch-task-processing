@@ -1,12 +1,15 @@
+using BatchProcessing.OrdersApi;
 using Microsoft.Extensions.Logging;
 
 namespace BatchProcessing.ImportHandlers;
 
-public class OrdersImportHandler(ILogger<OrdersImportHandler> logger) : IImportHandler
+public class OrdersImportHandler(
+    ILogger<OrdersImportHandler> logger,
+    IOrdersApiClient ordersApiClient) : IImportHandler
 {
     public string ImportTypeName => "Orders";
 
-    public Task HandleAsync(Upload upload, RowGroup group, CancellationToken ct)
+    public async Task HandleAsync(Upload upload, RowGroup group, CancellationToken ct)
     {
         var orderRows = group.Rows
             .Where(r => r.ParentId == null && r.CollectionName == "orders")
@@ -20,25 +23,27 @@ public class OrdersImportHandler(ILogger<OrdersImportHandler> logger) : IImportH
             var columns = order.Value.Split(',');
             var orderNumber = columns.ElementAtOrDefault(0) ?? "";
             var customerName = columns.ElementAtOrDefault(1) ?? "";
-            var totalAmount = columns.ElementAtOrDefault(2) ?? "0";
+            var totalAmount = decimal.TryParse(columns.ElementAtOrDefault(2), out var t) ? t : 0m;
 
-            logger.LogInformation("Order {OrderNumber} for {Customer}, total {Amount}.",
-                orderNumber, customerName, totalAmount);
+            var lines = group.Rows
+                .Where(r => r.ParentId == order.Id && r.CollectionName == "order-lines")
+                .Select(r =>
+                {
+                    var lineCols = r.Value.Split(',');
+                    return new OrderLineDto(
+                        ProductName: lineCols.ElementAtOrDefault(0) ?? "",
+                        Quantity: int.TryParse(lineCols.ElementAtOrDefault(1), out var q) ? q : 0,
+                        UnitPrice: decimal.TryParse(lineCols.ElementAtOrDefault(2), out var p) ? p : 0m);
+                })
+                .ToList();
 
-            var lineRows = group.Rows
-                .Where(r => r.ParentId == order.Id && r.CollectionName == "order-lines");
+            var dto = new OrderDto(orderNumber, customerName, totalAmount, lines);
+            var result = await ordersApiClient.SubmitOrderAsync(dto, ct);
 
-            foreach (var line in lineRows)
-            {
-                var lineCols = line.Value.Split(',');
-                var product = lineCols.ElementAtOrDefault(0) ?? "";
-                var qty = lineCols.ElementAtOrDefault(1) ?? "0";
-                var price = lineCols.ElementAtOrDefault(2) ?? "0";
-
-                logger.LogInformation("  Line: {Product} x{Qty} @ {Price}", product, qty, price);
-            }
+            if (result.Success)
+                logger.LogInformation("Order {OrderNumber} submitted, external ID: {OrderId}.", orderNumber, result.OrderId);
+            else
+                logger.LogWarning("Order {OrderNumber} failed: {Error}.", orderNumber, result.Error);
         }
-
-        return Task.CompletedTask;
     }
 }

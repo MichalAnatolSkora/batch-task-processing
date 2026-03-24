@@ -14,4 +14,8 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\BatchProcessing.OrdersApi\BatchProcessing.OrdersApi.csproj" />
+  </ItemGroup>
+
 </Project>

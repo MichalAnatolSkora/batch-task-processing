@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using BatchProcessing.ImportHandlers;
+using BatchProcessing.OrdersApi;
 using Dapper;
 using FluentAssertions;
 using Microsoft.Data.SqlClient;
@@ -123,6 +124,7 @@ public class WorkerTests : IAsyncLifetime
             .Build();
 
         var services = new ServiceCollection();
+        services.AddOrdersApi();
         services.AddKeyedScoped<IImportHandler, OrdersImportHandler>("Orders");
         services.AddKeyedScoped<IImportHandler, ProductsImportHandler>("Products");
         services.AddLogging();
