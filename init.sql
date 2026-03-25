@@ -9,7 +9,7 @@ CREATE TABLE Uploads (
     ImportTypeName NVARCHAR(255) NOT NULL,
     DateOfCreation DATETIME NOT NULL DEFAULT GETDATE(),
     Metadata NVARCHAR(MAX) NOT NULL DEFAULT '{}',
-    Status VARCHAR(20) NOT NULL DEFAULT 'Pending',
+    Status VARCHAR(20) NOT NULL DEFAULT 'Pending', -- 'Pending', 'Processing', 'Completed', 'Failed'
     PickedByWorker UNIQUEIDENTIFIER NULL,
     ProcessedAt DATETIME NULL
 );
