@@ -127,6 +127,40 @@ It spins up:
    ```
 3. The database schema will be prepared. If you insert records into the `Uploads` and `RowValues` tables, the workers will competitively claim and process the uploads, routing them to the correct `IImportHandler`.
 
+## Running Multiple Instances as Windows Services
+
+You can install and run multiple instances of the worker as separate Windows Services using the `sc.exe` utility. By passing the `--ServiceName` argument in the `binPath`, you can uniquely name each service instance.
+
+### Installation
+
+Run the following commands in an elevated Command Prompt (Administrator) to create multiple service instances (replace the path with your actual publish output path):
+
+```cmd
+sc.exe create "BatchWorker1" binPath= "C:\path\to\publish\BatchProcessing.exe --ServiceName BatchWorker1" start= auto
+sc.exe create "BatchWorker2" binPath= "C:\path\to\publish\BatchProcessing.exe --ServiceName BatchWorker2" start= auto
+```
+
+### Starting the Services
+
+Start the services using `sc.exe start`:
+
+```cmd
+sc.exe start "BatchWorker1"
+sc.exe start "BatchWorker2"
+```
+
+### Deleting the Services
+
+To remove the services, stop and delete them:
+
+```cmd
+sc.exe stop "BatchWorker1"
+sc.exe delete "BatchWorker1"
+
+sc.exe stop "BatchWorker2"
+sc.exe delete "BatchWorker2"
+```
+
 ## Integration Tests with Testcontainers
 
 This project includes a robust suite of integration tests in the `BatchProcessing.Tests` project to prove that the concurrency control works flawlessly.

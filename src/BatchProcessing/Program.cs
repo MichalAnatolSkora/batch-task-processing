@@ -10,9 +10,11 @@ builder.Services.AddOrdersApi();
 builder.Services.AddKeyedScoped<IImportHandler, OrdersImportHandler>("Orders");
 builder.Services.AddKeyedScoped<IImportHandler, ProductsImportHandler>("Products");
 
+var serviceName = builder.Configuration["ServiceName"] ?? "Batch Processing Service";
+
 builder.Services.AddWindowsService(options =>
 {
-    options.ServiceName = "Batch Processing Service";
+    options.ServiceName = serviceName;
 });
 
 var host = builder.Build();
